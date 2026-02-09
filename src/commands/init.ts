@@ -14,6 +14,7 @@ import { fetchUserRank, syncProfileToConvex } from "../utils/api.js";
 import { renderBadge } from "../output/badge.js";
 import { copyToClipboard } from "../utils/clipboard.js";
 import { generateOutputData, toPublicOutputData } from "../output/generator.js";
+import { promptAndInstallSchedule } from "./schedule.js";
 
 function checkGhCli(): boolean {
   try {
@@ -227,6 +228,34 @@ export async function runInit(): Promise<void> {
     console.log(
       chalk.dim(`  Repository: https://github.com/${fullRepoName}\n`)
     );
+
+    // Schedule prompt — offer automatic background syncing
+    const savedConfig = readConfig();
+    if (savedConfig && !savedConfig.schedule?.enabled) {
+      const { wantsSchedule } = await inquirer.prompt<{ wantsSchedule: boolean }>([
+        {
+          type: "confirm",
+          name: "wantsSchedule",
+          message: "Would you like to automatically sync your stats in the background?",
+          default: true,
+        },
+      ]);
+
+      if (wantsSchedule) {
+        const result = await promptAndInstallSchedule(savedConfig);
+        if (!result) {
+          console.log(
+            chalk.yellow("Schedule setup failed — you can set it up later with: clog schedule\n")
+          );
+        }
+      } else {
+        console.log(chalk.dim("  Skipped. You can set up a schedule later with: clog schedule\n"));
+      }
+    } else if (savedConfig?.schedule?.enabled) {
+      console.log(
+        chalk.dim(`  Schedule already active (${savedConfig.schedule.frequency}). Skipping.\n`)
+      );
+    }
 
     // Run first sync (pushes data to GitHub)
     console.log(chalk.bold("Running first sync...\n"));

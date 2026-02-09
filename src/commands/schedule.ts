@@ -11,7 +11,7 @@ import {
   writeConfig,
   getClaudeDir,
 } from "../utils/config.js";
-import type { ScheduleConfig } from "../types.js";
+import type { Config, ScheduleConfig } from "../types.js";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -601,5 +601,98 @@ export async function runScheduleLogs(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(chalk.red(`Failed to read logs: ${message}`));
+  }
+}
+
+/**
+ * Shared schedule setup for use in `clog init`.
+ * Prompts for frequency, installs scheduler, saves config.
+ * Returns true on success, false on failure (does not exit).
+ */
+export async function promptAndInstallSchedule(config: Config): Promise<boolean> {
+  console.log(chalk.bold("\n📅 Schedule automatic syncing\n"));
+
+  const { frequency } = await inquirer.prompt<{ frequency: string }>([
+    {
+      type: "list",
+      name: "frequency",
+      message: "How often should clog sync?",
+      default: "3x",
+      choices: [
+        { name: "1× per day", value: "1x" },
+        { name: "2× per day", value: "2x" },
+        { name: "3× per day (recommended)", value: "3x" },
+        { name: "4× per day", value: "4x" },
+        { name: "6× per day", value: "6x" },
+        { name: "12× per day", value: "12x" },
+        { name: "Custom cron expression", value: "custom" },
+      ],
+    },
+  ]);
+
+  let cronExpr: string;
+  let freqLabel: string;
+
+  if (frequency === "custom") {
+    const { customCron } = await inquirer.prompt<{ customCron: string }>([
+      {
+        type: "input",
+        name: "customCron",
+        message: "Enter cron expression (e.g. 0 */4 * * *):",
+        validate: (input: string) => {
+          const parts = input.trim().split(/\s+/);
+          return parts.length === 5 || "Must be a valid 5-field cron expression";
+        },
+      },
+    ]);
+    cronExpr = customCron.trim();
+    freqLabel = "custom";
+  } else {
+    cronExpr = frequencyToCron(frequency);
+    freqLabel = frequency;
+  }
+
+  const spinner = ora("Installing schedule...").start();
+
+  try {
+    const binPath = resolveBinPath();
+    const logPath = DEFAULT_LOG_PATH;
+
+    installScheduler(binPath, logPath, cronExpr);
+
+    const scheduleConfig: ScheduleConfig = {
+      enabled: true,
+      frequency: freqLabel,
+      cronExpr,
+      lastSync: config.schedule?.lastSync ?? null,
+      logPath,
+    };
+    writeConfig({ ...config, schedule: scheduleConfig });
+
+    spinner.succeed("Schedule installed");
+
+    const platform = isMacOS() ? "launchd" : "cron";
+    console.log(chalk.dim(`\n  Scheduler: ${platform}`));
+    console.log(chalk.dim(`  Frequency: ${freqLabel} (${cronExpr})`));
+    console.log(chalk.dim(`  Log file:  ${logPath}`));
+
+    if (isMacOS()) {
+      console.log(chalk.dim(`  Plist:     ${PLIST_PATH}`));
+    }
+
+    const nextSync = getNextSyncTime(cronExpr);
+    if (nextSync) {
+      console.log(chalk.dim(`  Next sync: ${formatTime(nextSync)}`));
+    }
+
+    console.log(
+      chalk.green("\n✓ Automatic syncing is now active.\n")
+    );
+    return true;
+  } catch (error) {
+    spinner.fail("Failed to install schedule");
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(chalk.red(message));
+    return false;
   }
 }
